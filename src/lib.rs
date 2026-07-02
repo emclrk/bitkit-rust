@@ -59,6 +59,9 @@ pub enum BitkitError {
 
     #[error("Empty bit string")]
     EmptyString,
+
+    #[error("Bit string length mismatch: {0} {1}")]
+    LengthMismatch(usize, usize),
 }
 
 impl Bitstream {
@@ -185,6 +188,50 @@ impl Bitstream {
             .map(|(sym, pct)| (sym, -pct.log2()))
             .collect::<HashMap<String, f32>>()
     }
+    /// Get the auto-correlation of this Bitstream. Returns a vector of CorrelationResults.
+    pub fn get_auto_correlation(&self) -> Vec<CorrelationResult> {
+        let length = self.len() as i32;
+        let corr_len = self.len() * 2 - 1;
+        // sum_n(x[n]*x[n-k])
+        let mut corr_vals = Vec::with_capacity(corr_len);
+        for k in -(length - 1)..(length) {
+            let mut sum: u32 = 0;
+            let mut overlap: u32 = 0;
+            for n in 0..length {
+                if n - k < 0 || n - k >= length {
+                    // out of range
+                    continue;
+                }
+                sum += if self.bit_at(n as usize) == self.bit_at((n - k) as usize) {
+                    1
+                } else {
+                    0
+                };
+                overlap += 1;
+            }
+            corr_vals.push(CorrelationResult {
+                offset: k,
+                matches: sum,
+                overlap,
+            });
+        }
+        corr_vals
+    }
+    /// Returns the hamming distance between this Bitstream and another. Will return an error if
+    /// the two Bitstreams have differing lengths.
+    pub fn get_hamming_dist(&self, bs: &Bitstream) -> Result<u32, BitkitError> {
+        if self.len() != bs.len() {
+            return Err(BitkitError::LengthMismatch(self.len(), bs.len()));
+        }
+        let dist = self
+            .bits
+            .chars()
+            .zip(bs.bits.chars())
+            .filter(|(x, y)| x != y)
+            .collect::<Vec<_>>()
+            .len();
+        Ok(dist as u32)
+    }
 } // impl Bitstream
 
 impl fmt::Display for Bitstream {
@@ -278,7 +325,7 @@ pub fn get_substr_counts(bitstrs: &[Bitstream], strlen: usize) -> HashMap<String
 }
 
 /// Get the cross-correlation of two bitstreams. Returns a vector of CorrelationResults
-pub fn get_correlation(bs1: &Bitstream, bs2: &Bitstream) -> Vec<CorrelationResult> {
+pub fn get_cross_correlation(bs1: &Bitstream, bs2: &Bitstream) -> Vec<CorrelationResult> {
     let bs1_len = bs1.len() as i32;
     let bs2_len = bs2.len() as i32;
     let corr_len = bs1.len() + bs2.len() - 1;
@@ -486,7 +533,7 @@ mod tests {
             Bitstream::new(String::from("1010")).unwrap(),
             Bitstream::new(String::from("01")).unwrap(),
         ];
-        let corr = get_correlation(&bitstrs[0], &bitstrs[1]);
+        let corr = get_cross_correlation(&bitstrs[0], &bitstrs[1]);
         assert_eq!(corr.len(), 5);
         assert_eq!(
             corr,
@@ -498,5 +545,34 @@ mod tests {
                 CorrelationResult::new(3, 1, 1),
             ]
         );
+    }
+    #[test]
+    fn test_auto_corr() {
+        let bs = Bitstream::new(String::from("101010")).unwrap();
+        let autocorr = bs.get_auto_correlation();
+        assert_eq!(
+            autocorr,
+            vec![
+                CorrelationResult::new(-5, 0, 1),
+                CorrelationResult::new(-4, 2, 2),
+                CorrelationResult::new(-3, 0, 3),
+                CorrelationResult::new(-2, 4, 4),
+                CorrelationResult::new(-1, 0, 5),
+                CorrelationResult::new(0, 6, 6),
+                CorrelationResult::new(1, 0, 5),
+                CorrelationResult::new(2, 4, 4),
+                CorrelationResult::new(3, 0, 3),
+                CorrelationResult::new(4, 2, 2),
+                CorrelationResult::new(5, 0, 1)
+            ]
+        );
+    }
+    #[test]
+    fn test_hamming_dist() {
+        let bs1 = Bitstream::new("1010101100".to_string()).unwrap();
+        let bs2 = Bitstream::new("1010010100".to_string()).unwrap();
+        let dist = bs1.get_hamming_dist(&bs2);
+        assert!(dist.is_ok());
+        assert_eq!(dist.unwrap(), 3u32);
     }
 } // mod tests
