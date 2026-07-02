@@ -24,6 +24,28 @@ struct URHProtocol {
     messages: Messages,
 }
 
+/// The result of a cross-correlation between two Bitstreams.
+/// `offset`, which may be positive or negative, is the number of bits by which Bitstream 2 is
+/// shifted relative to Bitstream 1.
+/// `matches` is the number of bits that are the same in both Bitstreams at this offset
+/// `overlap` is the number of bits that overlapped at this offset
+#[derive(Debug, PartialEq)]
+pub struct CorrelationResult {
+    offset: i32,
+    matches: u32,
+    overlap: u32,
+}
+
+impl CorrelationResult {
+    pub fn new(offs: i32, mats: u32, ol: u32) -> Self {
+        CorrelationResult {
+            offset: offs,
+            matches: mats,
+            overlap: ol,
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum BitkitError {
     #[error("IO error: {0}")]
@@ -255,6 +277,37 @@ pub fn get_substr_counts(bitstrs: &[Bitstream], strlen: usize) -> HashMap<String
     counts
 }
 
+/// Get the cross-correlation of two bitstreams. Returns a vector of CorrelationResults
+pub fn get_correlation(bs1: &Bitstream, bs2: &Bitstream) -> Vec<CorrelationResult> {
+    let bs1_len = bs1.len() as i32;
+    let bs2_len = bs2.len() as i32;
+    let corr_len = bs1.len() + bs2.len() - 1;
+    // sum_n(x[n]*y[n-k])
+    let mut corr_vals = Vec::with_capacity(corr_len);
+    for k in -(bs2_len - 1)..(bs1_len) {
+        let mut sum: u32 = 0;
+        let mut overlap: u32 = 0;
+        for n in 0..bs1_len {
+            if n - k < 0 || n - k >= bs2_len {
+                // out of range
+                continue;
+            }
+            sum += if bs1.bit_at(n as usize) == bs2.bit_at((n - k) as usize) {
+                1
+            } else {
+                0
+            };
+            overlap += 1;
+        }
+        corr_vals.push(CorrelationResult {
+            offset: k,
+            matches: sum,
+            overlap,
+        });
+    }
+    corr_vals
+}
+
 // Bitkit I/O
 pub fn from_txt(filepath: impl AsRef<Path>) -> Result<Vec<Bitstream>, BitkitError> {
     let file = File::open(filepath)?;
@@ -426,5 +479,24 @@ mod tests {
         assert_eq!(poswise_entropy[1], 0.0);
         assert!((poswise_entropy[2] - 1.0).abs() < 1e-6);
         assert_eq!(poswise_entropy[3], 0.0);
+    }
+    #[test]
+    fn test_cross_corr() {
+        let bitstrs = vec![
+            Bitstream::new(String::from("1010")).unwrap(),
+            Bitstream::new(String::from("01")).unwrap(),
+        ];
+        let corr = get_correlation(&bitstrs[0], &bitstrs[1]);
+        assert_eq!(corr.len(), 5);
+        assert_eq!(
+            corr,
+            vec![
+                CorrelationResult::new(-1, 1, 1),
+                CorrelationResult::new(0, 0, 2),
+                CorrelationResult::new(1, 2, 2),
+                CorrelationResult::new(2, 0, 2),
+                CorrelationResult::new(3, 1, 1),
+            ]
+        );
     }
 } // mod tests
