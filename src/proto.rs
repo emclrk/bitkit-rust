@@ -12,6 +12,10 @@ pub enum ProtoField {
     Ambiguous,
     // TODO: Repeat(u32, Box<ProtoField>) or similar
 }
+/// A struct representation of the protocol structure. `protocol` is a listing of the protocol
+/// fields and the number of bits in each field in order.
+/// num_fields is the number of entries in the `protocol` vector
+/// num_bits is the total number of bits in the protocol
 #[derive(Debug)]
 pub struct ProtocolStructure {
     protocol: Vec<(ProtoField, u32)>,
@@ -24,9 +28,11 @@ impl ProtocolStructure {
     pub fn get_fields(&self) -> Vec<(ProtoField, u32)> {
         self.protocol.clone()
     }
+    /// Number of entries in the protocol vector
     pub fn get_num_fields(&self) -> usize {
         self.num_fields
     }
+    /// Total number of bits in the protocol
     pub fn get_num_bits(&self) -> usize {
         self.num_bits
     }
