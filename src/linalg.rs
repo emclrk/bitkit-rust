@@ -9,12 +9,16 @@ pub struct BitMatrix {
     bits: Vec<u8>,   // bit matrix, stored row-wise
     num_rows: usize, // equivalent to column length
     num_cols: usize, // equivalent to row length
+    is_rref: bool,   // bool - is this a reduced row echelon form matrix
 }
 
 impl BitMatrix {
     /// Given a slice of Bitstreams, create a BitMatrix. Assumes all Bitstreams are of equal
     /// length.
     pub fn new(bitstrs: &[Bitstream]) -> Result<Self, BitkitError> {
+        Self::new_with_rref(bitstrs, false)
+    }
+    pub fn new_with_rref(bitstrs: &[Bitstream], is_rref: bool) -> Result<Self, BitkitError> {
         if bitstrs.is_empty() || bitstrs[0].is_empty() {
             return Err(BitkitError::EmptyString);
         }
@@ -31,11 +35,21 @@ impl BitMatrix {
             }
         }
         assert!(bitvec.len() == num_rows * num_cols);
+
         Ok(BitMatrix {
             bits: bitvec,
             num_rows,
             num_cols,
+            is_rref,
         })
+    }
+    pub fn new_empty() -> Self {
+        BitMatrix {
+            bits: vec![],
+            num_rows: 0,
+            num_cols: 0,
+            is_rref: false,
+        }
     }
     pub fn num_rows(&self) -> usize {
         self.num_rows
@@ -60,6 +74,7 @@ impl BitMatrix {
             bits: bitvec,
             num_rows: self.num_rows,
             num_cols: width,
+            is_rref: false,
         })
     }
     /// Return a new BitMatrix that is the transpose of this one
@@ -74,8 +89,10 @@ impl BitMatrix {
             bits: bitvec,
             num_rows: self.num_cols,
             num_cols: self.num_rows,
+            is_rref: false,
         }
     }
+    /// Swap two rows
     fn swap_rows(&mut self, row_1_idx: usize, row_2_idx: usize) {
         if row_1_idx == row_2_idx {
             return;
@@ -89,19 +106,21 @@ impl BitMatrix {
     }
 
     /// Get rank of the matrix
-    pub fn rank(&self) -> usize {
-        let row_ech = self.row_echelon_form();
-        let mut row_rank = 0;
-        for ii in 0..row_ech.num_rows {
-            if row_ech[ii].iter().any(|x| *x != 0) {
-                row_rank += 1;
-            }
+    pub fn mat_rank(&self) -> usize {
+        if self.is_rref {
+            (0..self.num_rows)
+                .filter(|&ii| self[ii].iter().any(|&x| x != 0))
+                .count()
+        } else {
+            let reduced = self.clone().rref();
+            (0..reduced.num_rows)
+                .filter(|&ii| reduced[ii].iter().any(|&x| x != 0))
+                .count()
         }
-        row_rank
-    }
+    } // rank
     /// Get row echelon form of the matrix
-    pub fn row_echelon_form(&self) -> Self {
-        let mut row_ech = self.clone();
+    fn row_echelon_form(self) -> Self {
+        let mut row_ech = self;
         let mut min_row = 0;
         let mut min_col = 0;
         'outer: loop {
@@ -133,30 +152,66 @@ impl BitMatrix {
                     }
                 }
                 min_row += 1;
+                min_col += 1;
                 if min_row >= row_ech.num_rows || min_col >= row_ech.num_cols {
                     break 'outer;
                 }
             }
         }
         row_ech
-    } // fn ref
+    } // row_echelon_form
     /// Get reduced row echelon form of a matrix
-    pub fn rref(&self) -> Self {
-        let mut rrow_ech = self.row_echelon_form();
-        for row in (0..rrow_ech.num_rows).rev() {
-            if let Some(pivot_col) = rrow_ech[row].iter().position(|&x| x == 1) {
-                let pivot_row = rrow_ech[row].to_vec();
+    fn rref(self) -> Self {
+        let mut result = self.row_echelon_form();
+        for row in (0..result.num_rows).rev() {
+            if let Some(pivot_col) = result[row].iter().position(|&x| x == 1) {
+                let pivot_row = result[row].to_vec();
                 for ii in (0..row).rev() {
-                    if rrow_ech[ii][pivot_col] == 1 {
-                        for jj in pivot_col..rrow_ech.num_cols {
-                            rrow_ech[ii][jj] ^= pivot_row[jj];
+                    if result[ii][pivot_col] == 1 {
+                        for jj in pivot_col..result.num_cols {
+                            result[ii][jj] ^= pivot_row[jj];
                         }
                     }
                 }
             }
         }
-        rrow_ech
-    }
+        result.is_rref = true;
+        result
+    } // reduced row echelon form
+    /// Find the nullspace matrix
+    pub fn nullspace(self) -> Self {
+        let reduced = if self.is_rref { self } else { self.rref() };
+        let pivot_locs: Vec<_> = (0..reduced.num_rows())
+            .map(|ii| (ii, reduced[ii].iter().position(|&x| x == 1)))
+            .collect();
+        let free_cols: Vec<_> = (0..reduced.num_cols())
+            .filter(|ii| {
+                pivot_locs
+                    .iter()
+                    .find(|(_x, y)| y.is_some() && y.unwrap() == *ii)
+                    .is_none()
+            })
+            .collect();
+        // make a nullspace vector for each free column
+        let mut nullvecs = Vec::with_capacity(reduced.num_cols() * free_cols.len());
+        for col_pos in 0..reduced.num_cols() {
+            for col_num in free_cols.iter() {
+                if col_pos == *col_num {
+                    nullvecs.push(1);
+                } else if let Some(loc) = pivot_locs.iter().find(|loc| loc.1 == Some(col_pos)) {
+                    nullvecs.push(reduced[loc.0][*col_num]);
+                } else {
+                    nullvecs.push(0);
+                }
+            }
+        }
+        BitMatrix {
+            bits: nullvecs,
+            num_rows: reduced.num_cols(),
+            num_cols: num_free,
+            is_rref: false,
+        }
+    } // find nullspace basis vectors
 } // impl BitMatrix
 
 impl Index<usize> for BitMatrix {
@@ -229,6 +284,7 @@ pub fn mat_mul_gf2(mat1: &BitMatrix, mat2: &BitMatrix) -> Result<BitMatrix, Bitk
         bits: result_vec,
         num_rows: mat1.num_rows,
         num_cols: mat2.num_cols,
+        is_rref: false,
     })
 }
 
@@ -332,14 +388,36 @@ mod tests {
         ])
         .unwrap();
         let rrow_ech = matrix.rref();
-        let expected = BitMatrix::new(&vec![
-            Bitstream::new(String::from("10001")).unwrap(),
-            Bitstream::new(String::from("01001")).unwrap(),
-            Bitstream::new(String::from("00100")).unwrap(),
-            Bitstream::new(String::from("00011")).unwrap(),
-            Bitstream::new(String::from("00000")).unwrap(),
-        ])
+        let expected = BitMatrix::new_with_rref(
+            &vec![
+                Bitstream::new(String::from("10001")).unwrap(),
+                Bitstream::new(String::from("01001")).unwrap(),
+                Bitstream::new(String::from("00100")).unwrap(),
+                Bitstream::new(String::from("00011")).unwrap(),
+                Bitstream::new(String::from("00000")).unwrap(),
+            ],
+            true,
+        )
         .unwrap();
         assert_eq!(rrow_ech, expected);
+    }
+    #[test]
+    fn test_nullspace() {
+        let matrix = BitMatrix::new(&vec![
+            Bitstream::new(String::from("10011")).unwrap(),
+            Bitstream::new(String::from("01001")).unwrap(),
+            Bitstream::new(String::from("00110")).unwrap(),
+        ])
+        .unwrap();
+        let ns = matrix.nullspace();
+        let expected = BitMatrix::new(&vec![
+            Bitstream::new(String::from("11")).unwrap(),
+            Bitstream::new(String::from("01")).unwrap(),
+            Bitstream::new(String::from("10")).unwrap(),
+            Bitstream::new(String::from("10")).unwrap(),
+            Bitstream::new(String::from("01")).unwrap(),
+        ])
+        .unwrap();
+        assert_eq!(ns, expected);
     }
 } // mod tests
