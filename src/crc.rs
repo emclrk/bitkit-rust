@@ -1,4 +1,4 @@
-use crate::linalg::BitMatrix;
+use crate::linalg::{berlekamp_massey, mat_mul_gf2, BitMatrix};
 use crate::proto::{extract_varying, ProtocolStructure};
 use crate::{from_txt, positionwise_entropy, BitkitError, Bitstream};
 use rayon::prelude::*;
@@ -24,7 +24,7 @@ pub struct RankResult {
 /// samples is too low, but a lack of an error is not a guarantee that there are enough Bitstreams.
 /// That said, if there are at least as many Bitstreams as there are varying bits in the protocol,
 /// that should be enough (although it's better to have more for a safe cushion).
-pub fn find_crc(bitstrs: &[Bitstream]) -> Result<(), BitkitError> {
+pub fn find_crc(bitstrs: &[Bitstream]) -> Result<BitMatrix, BitkitError> {
     let ps = ProtocolStructure::infer_structure(&positionwise_entropy(bitstrs));
     let varying_bitstrs: Vec<Bitstream> = bitstrs
         .iter()
@@ -34,7 +34,7 @@ pub fn find_crc(bitstrs: &[Bitstream]) -> Result<(), BitkitError> {
 }
 /// Do the actual work to find the CRC. Expects a slice of Bitstreams composed of only the varying
 /// bits from the protocol.
-pub fn find_crc_from_varying(varying_bitstrs: Vec<Bitstream>) -> Result<(), BitkitError> {
+pub fn find_crc_from_varying(varying_bitstrs: Vec<Bitstream>) -> Result<BitMatrix, BitkitError> {
     // XORing to remove any affine element (ex if the CRC was XOR'd by a constant)
     let mut bitmat = BitMatrix::new(&varying_bitstrs).unwrap();
     for ii in 1..bitmat.num_rows() {
@@ -48,7 +48,7 @@ pub fn find_crc_from_varying(varying_bitstrs: Vec<Bitstream>) -> Result<(), Bitk
         bitmat[0][jj] = 0;
     }
     let base_rank = bitmat.mat_rank();
-    if base_rank == varying_bitstrs.len() - 1 {
+    if base_rank <= varying_bitstrs.len() {
         let error_msg: String = format!(
             "Matrix rank {} is too low to detect CRC with linear algebra methods.\
                 More bitstream samples needed",
@@ -58,7 +58,7 @@ pub fn find_crc_from_varying(varying_bitstrs: Vec<Bitstream>) -> Result<(), Bitk
     }
     // For now, we're doing an exhaustive search, fully aware that this is dumb, but at least it's
     // threaded. We don't want to miss it if it's in weird place.
-    let rank_drop: Vec<RankResult> = (1..=bitmat.num_cols())
+    let mut rank_drop: Vec<RankResult> = (1..=bitmat.num_cols())
         .into_par_iter()
         .map(|width| {
             let rank = bitmat.window(0, width).unwrap().mat_rank();
@@ -70,10 +70,11 @@ pub fn find_crc_from_varying(varying_bitstrs: Vec<Bitstream>) -> Result<(), Bitk
         })
         .filter(|res| res.diff > 0)
         .collect();
+    rank_drop.sort_by_key(|r| r.width);
     let mut prev = rank_drop[0];
     // Check for contiguous CRC bits
     for entry in &rank_drop[1..] {
-        if entry.width != prev.width + 1 || entry.rank != prev.rank + 1 {
+        if entry.width != prev.width + 1 || entry.rank != prev.rank {
             return Err(BitkitError::MiscellaneousError(
                 "Candidate CRC fields are NOT contiguous. Either something unexpected is going on\
                 (weird data) or the CRC is interleaved or something. More investigation needed."
@@ -82,33 +83,21 @@ pub fn find_crc_from_varying(varying_bitstrs: Vec<Bitstream>) -> Result<(), Bitk
         }
         prev = *entry;
     }
+    // let ns = bitmat.clone().nullspace();
+    // assert!(mat_mul_gf2(&bitmat, &ns)?.is_zero());
 
-    Ok(())
+    Ok(bitmat.nullspace())
 } // find_crc
 pub fn test_all() {
-    let bitstrs = from_txt("/home/emily/work_area/bitkit-rust/test_bits.txt").unwrap();
-    // XORing to remove any affine element (ex if the CRC was XOR'd by a constant)
-    let mut bitmat = BitMatrix::new(&bitstrs).unwrap();
-    for ii in 1..bitmat.num_rows() {
-        for jj in 0..bitmat.num_cols() {
-            bitmat[ii][jj] ^= bitmat[0][jj];
-        }
-    }
-    for jj in 0..bitmat.num_cols() {
-        bitmat[0][jj] = 0;
-    }
-    let base_rank = bitmat.mat_rank();
-    println!("base rank: {base_rank}");
-    let mut ranks: Vec<(usize, usize)> = vec![];
-    for width in 1..bitmat.num_cols() + 1 {
-        let win = bitmat.window(0, width).unwrap();
-        ranks.push((win.mat_rank(), width));
-    }
-    println!("rank|width|diff");
-    for rank in ranks {
-        let diff = rank.1 - rank.0;
-        if diff > 0 {
-            println!("{} | {} | {}", rank.0, rank.1, rank.1 - rank.0);
-        }
+    let bitstrs = from_txt("/home/emily/work_area/bitkit-rust/test_bits_interlaken.txt").unwrap();
+    let res = find_crc(&bitstrs).unwrap();
+    let k = res.num_rows() - res.num_cols();
+    let null_vecs = res.row_window(k).transpose();
+    println!("{res}\n-----\n{null_vecs}");
+    for ii in 0..null_vecs.num_rows() {
+        let polynomial = berlekamp_massey(&null_vecs[ii]);
+        println!("{:?}", polynomial);
+        // assert_eq!(polynomial, vec![1, 1, 0, 1]);  // 3-bit GSM
+        assert_eq!(polynomial, vec![1, 1, 0, 0, 1]); // 3-bit GSM
     }
 }

@@ -51,6 +51,9 @@ impl BitMatrix {
             is_rref: false,
         }
     }
+    pub fn is_zero(&self) -> bool {
+        self.bits.iter().find(|&b| *b != 0).is_none()
+    }
     pub fn num_rows(&self) -> usize {
         self.num_rows
     }
@@ -76,6 +79,16 @@ impl BitMatrix {
             num_cols: width,
             is_rref: false,
         })
+    }
+    /// Return a new matrix that is a vertical window of this matrix.
+    /// Size will be num_cols x height
+    pub fn row_window(&self, height: usize) -> Self {
+        BitMatrix {
+            bits: self.bits[..height * self.num_cols].to_vec(),
+            num_rows: height,
+            num_cols: self.num_cols,
+            is_rref: false,
+        }
     }
     /// Return a new BitMatrix that is the transpose of this one
     pub fn transpose(&self) -> Self {
@@ -178,7 +191,7 @@ impl BitMatrix {
         result.is_rref = true;
         result
     } // reduced row echelon form
-    /// Find the nullspace matrix
+    /// Find the nullspace basis vectors
     pub fn nullspace(self) -> Self {
         let reduced = if self.is_rref { self } else { self.rref() };
         let pivot_locs: Vec<_> = (0..reduced.num_rows())
@@ -208,7 +221,7 @@ impl BitMatrix {
         BitMatrix {
             bits: nullvecs,
             num_rows: reduced.num_cols(),
-            num_cols: num_free,
+            num_cols: free_cols.len(),
             is_rref: false,
         }
     } // find nullspace basis vectors
@@ -286,6 +299,50 @@ pub fn mat_mul_gf2(mat1: &BitMatrix, mat2: &BitMatrix) -> Result<BitMatrix, Bitk
         num_cols: mat2.num_cols,
         is_rref: false,
     })
+}
+
+/// Berlekamp-Massey algorithm
+pub fn berlekamp_massey(null_vec: &[u8]) -> Vec<u8> {
+    // Step 1 - initialize
+    let mut l_assumed_errs = 0; // current number of assumed errors
+    let mut cx_potential: Vec<u8> = vec![0; null_vec.len()];
+    let mut bx_prev_cx: Vec<u8> = vec![0; null_vec.len()];
+    cx_potential[0] = 1;
+    bx_prev_cx[0] = 1;
+    let mut m_iters_since_update = 1;
+    let mut disc;
+    for n in 0..null_vec.len() {
+        // step 2 - calculate discrepancy
+        disc = (1..=l_assumed_errs).fold(null_vec[n], |acc, ii| {
+            acc ^ (cx_potential[ii] & null_vec[n - ii])
+        });
+        if disc == 0 {
+            // Step 3
+            m_iters_since_update += 1;
+        } else if 2 * l_assumed_errs <= n {
+            // Step 5
+            let tx_temp_cx = cx_potential.clone();
+            // C(x) = C(x) - d b−1 x^m B(x);
+            // In GF(2), - is XOR, d/b is 1 (bc they're nonzero by virtue of reaching this point in
+            // the code), x^m shifts B(x) by m
+            for ii in m_iters_since_update..cx_potential.len() {
+                cx_potential[ii] ^= bx_prev_cx[ii - m_iters_since_update];
+            }
+            l_assumed_errs = n + 1 - l_assumed_errs;
+            bx_prev_cx = tx_temp_cx.clone();
+            m_iters_since_update = 1;
+        } else {
+            // step 4
+            for ii in m_iters_since_update..cx_potential.len() {
+                cx_potential[ii] ^= bx_prev_cx[ii - m_iters_since_update];
+            }
+            m_iters_since_update += 1;
+        }
+    }
+    while cx_potential.last() == Some(&0) {
+        cx_potential.pop();
+    }
+    cx_potential
 }
 
 #[cfg(test)]
@@ -419,5 +476,10 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(ns, expected);
+    }
+    #[test]
+    fn test_berlekamp_massey() {
+        let seq: Vec<u8> = vec![1, 1, 0, 1, 1, 0];
+        assert_eq!(berlekamp_massey(&seq), vec![1, 1, 1]);
     }
 } // mod tests
