@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use thiserror::Error;
+pub mod crc;
 pub mod linalg;
 pub mod proto;
 
@@ -81,8 +82,11 @@ pub enum BitkitError {
     #[error("Index error: used {0} max {1}")]
     IndexError(usize, usize),
 
-    #[error("Dimension error: {0}x{1} * {2} {3}")]
+    #[error("Dimension error: {0}x{1} * {2}x{3}")]
     MatrixMultDimError(usize, usize, usize, usize),
+
+    #[error("{0}")]
+    MiscellaneousError(String),
 }
 
 impl Bitstream {
@@ -329,6 +333,7 @@ pub fn get_alphabet(bitstrs: &[Bitstream], symlen: usize, skip_bits: usize) -> H
     let mut counts: HashMap<String, u32> = HashMap::new();
     for bitstr in bitstrs {
         if skip_bits > 0 {
+            // skip(0) makes a copy, so don't call it if skip_bits == 0
             bitstr
                 .skip(skip_bits)
                 .accumulate_sym_counts(symlen, &mut counts);
