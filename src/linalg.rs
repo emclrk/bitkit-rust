@@ -18,7 +18,7 @@ impl BitMatrix {
     pub fn new(bitstrs: &[Bitstream]) -> Result<Self, BitkitError> {
         Self::new_with_rref(bitstrs, false)
     }
-    pub fn new_with_rref(bitstrs: &[Bitstream], is_rref: bool) -> Result<Self, BitkitError> {
+    fn new_with_rref(bitstrs: &[Bitstream], is_rref: bool) -> Result<Self, BitkitError> {
         if bitstrs.is_empty() || bitstrs[0].is_empty() {
             return Err(BitkitError::EmptyString);
         }
@@ -43,7 +43,7 @@ impl BitMatrix {
             is_rref,
         })
     }
-    pub fn new_empty() -> Self {
+    fn new_empty() -> Self {
         BitMatrix {
             bits: vec![],
             num_rows: 0,
@@ -52,7 +52,7 @@ impl BitMatrix {
         }
     }
     pub fn is_zero(&self) -> bool {
-        self.bits.iter().find(|&b| *b != 0).is_none()
+        self.bits.iter().all(|&b| *b != 0)
     }
     pub fn num_rows(&self) -> usize {
         self.num_rows
@@ -82,13 +82,16 @@ impl BitMatrix {
     }
     /// Return a new matrix that is a vertical window of this matrix.
     /// Size will be num_cols x height
-    pub fn row_window(&self, height: usize) -> Self {
-        BitMatrix {
+    pub fn row_window(&self, height: usize) -> Result<Self, BitkitError> {
+        if height > self.num_rows {
+            return Err(BitkitError::IndexError(height, self.num_rows));
+        }
+        Ok(BitMatrix {
             bits: self.bits[..height * self.num_cols].to_vec(),
             num_rows: height,
             num_cols: self.num_cols,
             is_rref: false,
-        }
+        })
     }
     /// Return a new BitMatrix that is the transpose of this one
     pub fn transpose(&self) -> Self {
@@ -303,6 +306,11 @@ pub fn mat_mul_gf2(mat1: &BitMatrix, mat2: &BitMatrix) -> Result<BitMatrix, Bitk
 
 /// Berlekamp-Massey algorithm
 pub fn berlekamp_massey(null_vec: &[u8]) -> Vec<u8> {
+    if null_vec.is_empty() {
+        // empty null vec --> LFSR of length 0 is represented by the trivial polynomial
+        // w/no feedback taps
+        return vec![1];
+    }
     // Step 1 - initialize
     let mut l_assumed_errs = 0; // current number of assumed errors
     let mut cx_potential: Vec<u8> = vec![0; null_vec.len()];
@@ -329,7 +337,7 @@ pub fn berlekamp_massey(null_vec: &[u8]) -> Vec<u8> {
                 cx_potential[ii] ^= bx_prev_cx[ii - m_iters_since_update];
             }
             l_assumed_errs = n + 1 - l_assumed_errs;
-            bx_prev_cx = tx_temp_cx.clone();
+            bx_prev_cx = tx_temp_cx;
             m_iters_since_update = 1;
         } else {
             // step 4

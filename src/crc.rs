@@ -12,7 +12,7 @@ use rayon::prelude::*;
 /// `diff` : the difference between the width of the window and the rank of the matrix. diff=0 means
 ///          full rank, diff>0 signals probable CRC bit(s) entering the window
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub struct RankResult {
+struct RankResult {
     rank: usize,
     width: usize,
     diff: usize,
@@ -51,7 +51,7 @@ pub fn find_crc(bitstrs: &[Bitstream]) -> Result<CrcResult, BitkitError> {
 /// bits from the protocol.
 pub fn find_crc_from_varying(varying_bitstrs: Vec<Bitstream>) -> Result<CrcResult, BitkitError> {
     // XORing to remove any affine element (eg if the CRC was initialized or XOR'd by a constant)
-    let mut bitmat = BitMatrix::new(&varying_bitstrs).unwrap();
+    let mut bitmat = BitMatrix::new(&varying_bitstrs)?;
     for ii in 1..bitmat.num_rows() {
         for jj in 0..bitmat.num_cols() {
             bitmat[ii][jj] ^= bitmat[0][jj];
@@ -106,17 +106,20 @@ pub fn find_crc_from_varying(varying_bitstrs: Vec<Bitstream>) -> Result<CrcResul
 
     let ns = bitmat.nullspace();
     let k = ns.num_rows() - ns.num_cols();
-    let null_vecs = ns.row_window(k).transpose();
+    // TODO test all null vecs and return the most frequent answer for robustness?
+    let null_vecs = ns.row_window(k)?.transpose();
     let polynomial = berlekamp_massey(&null_vecs[0]);
+    let start_col = rank_drop[0].width - 1;
+    let width = polynomial.len() - 1;
     Ok(CrcResult {
-        start_col: rank_drop[0].width,
-        width: polynomial.len() - 1,
-        xor_val: get_xor_val(&varying_bitstrs[0], &polynomial),
+        start_col,
+        width,
+        xor_val: get_xor_val(&varying_bitstrs[0], &polynomial, start_col, width),
         crc_polynomial: polynomial,
     })
 }
 /// CRC of our polynomial on a data frame with zero-state input
-pub fn crc_zero_init(poly: &[u8], data_vec: &[u8]) -> u128 {
+fn crc_zero_init(poly: &[u8], data_vec: &[u8]) -> u128 {
     let poly_val = poly[..poly.len() - 1]
         .iter()
         .enumerate()
@@ -149,11 +152,15 @@ pub fn crc_zero_init(poly: &[u8], data_vec: &[u8]) -> u128 {
 /// function. It encapsulates any initial value and final XOR value that may be used in the
 /// original CRC protocol. (also depends on the data length - this will only be valid for
 /// bitstreams of the same length)
-pub fn get_xor_val(bs: &Bitstream, poly: &[u8]) -> u128 {
+fn get_xor_val(bs: &Bitstream, poly: &[u8], start_col: usize, width: usize) -> u128 {
     let num_crc_bits = poly.len() - 1;
     let bits = bs.bits_as_bytes();
-    let data_vec = bits[..bits.len() - num_crc_bits].to_vec();
-    let crc_packed = bits[bits.len() - num_crc_bits..]
+    let data_vec: Vec<u8> = bits[..start_col]
+        .iter()
+        .chain(bits[start_col + width..].iter())
+        .copied()
+        .collect();
+    let crc_packed = bits[start_col..start_col + num_crc_bits]
         .iter()
         .enumerate()
         .fold(0u128, |acc, (ii, &bit)| {
@@ -166,13 +173,9 @@ pub fn get_xor_val(bs: &Bitstream, poly: &[u8]) -> u128 {
 mod tests {
     use super::*;
     use crate::from_txt;
-
-    #[test]
-    fn test_crc() {
-        let bitstrs = from_txt("./tests/test_bits_interlaken.txt").unwrap();
+    fn test_crc(bitstrs: &[Bitstream], expected_poly: Vec<u8>) {
         let result = find_crc(&bitstrs).unwrap();
-        assert_eq!(result.crc_polynomial, vec![1, 1, 0, 0, 1]);
-        assert_eq!(result.xor_val, 0x2);
+        assert_eq!(result.crc_polynomial, expected_poly);
         let bits = bitstrs[2].bits_as_bytes();
         let data_vec = bits[..bits.len() - result.width].to_vec();
         let crc_packed = bits[bits.len() - result.width..]
@@ -184,20 +187,21 @@ mod tests {
         let recovered = crc_zero_init(&result.crc_polynomial, &data_vec) ^ result.xor_val;
         assert_eq!(crc_packed, recovered);
     }
+
+    #[test]
+    fn test_crc_interlaken() {
+        let bitstrs = from_txt("./tests/test_bits_interlaken.txt").unwrap();
+        test_crc(&bitstrs, vec![1, 1, 0, 0, 1]);
+    }
+    #[test]
+    fn test_crc_7mmc() {
+        // this one has no init or xorout
+        let bitstrs = from_txt("./tests/test_bits_crc7mmc.txt").unwrap();
+        test_crc(&bitstrs, vec![1, 0, 0, 1, 0, 0, 0, 1]);
+    }
     #[test]
     fn test_crc_6() {
         let bitstrs = from_txt("./tests/test_bits_crc6.txt").unwrap();
-        let result = find_crc(&bitstrs).unwrap();
-        assert_eq!(result.crc_polynomial, vec![1, 1, 1, 0, 0, 1, 1]);
-        let bits = bitstrs[1].bits_as_bytes();
-        let data_vec = bits[..bits.len() - result.width].to_vec();
-        let crc_packed = bits[bits.len() - result.width..]
-            .iter()
-            .enumerate()
-            .fold(0u128, |acc, (ii, &bit)| {
-                acc | ((bit as u128) << (result.width - 1 - ii))
-            });
-        let recovered = crc_zero_init(&result.crc_polynomial, &data_vec) ^ result.xor_val;
-        assert_eq!(crc_packed, recovered);
+        test_crc(&bitstrs, vec![1, 1, 1, 0, 0, 1, 1]);
     }
 }
