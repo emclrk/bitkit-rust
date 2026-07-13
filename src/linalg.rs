@@ -43,16 +43,8 @@ impl BitMatrix {
             is_rref,
         })
     }
-    fn new_empty() -> Self {
-        BitMatrix {
-            bits: vec![],
-            num_rows: 0,
-            num_cols: 0,
-            is_rref: false,
-        }
-    }
     pub fn is_zero(&self) -> bool {
-        self.bits.iter().all(|&b| *b != 0)
+        self.bits.iter().all(|&b| b != 0)
     }
     pub fn num_rows(&self) -> usize {
         self.num_rows
