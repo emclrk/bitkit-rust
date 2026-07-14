@@ -239,13 +239,15 @@ fn run(cli: Cli) -> Result<(), BitkitError> {
             println!("=== CRC: {file} ===");
             println!();
             println!("Polynomial:  0x{poly_val:x} ({}-bit)", result.width);
-            println!("Location:    bit {} in varying bits", result.start_col);
+            println!(
+                "Location:    bit {} in frame (0-indexed)",
+                result.frame_start_col
+            );
             println!("refin:       {}", result.refin);
             println!("refout:      {}", result.refout);
             println!("xor_val:     0x{:x}", result.xor_val);
             println!("Score:       {:.1}%", result.score * 100.0);
             println!();
-            println!("Note: location is relative to varying bits only (fixed prefix stripped).");
         }
 
         Commands::Correlate { file, a, b, top } => {

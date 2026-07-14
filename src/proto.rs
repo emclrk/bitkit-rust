@@ -103,43 +103,52 @@ impl ProtocolStructure {
         }
         summary
     }
-} // impl ProtocolStructure
-/// Pull out only the varying/ambiguous bits from a Bitstream
-pub fn extract_varying(bs: &Bitstream, ps: &ProtocolStructure) -> Result<String, BitkitError> {
-    if bs.len() != ps.get_num_bits() {
-        return Err(BitkitError::LengthMismatch(bs.len(), ps.get_num_bits()));
+    /// Pull out only the varying/ambiguous bits from a Bitstream
+    pub fn extract_varying_bits(&self, bs: &Bitstream) -> Result<String, BitkitError> {
+        Ok(self.extract_varying(bs)?.0)
     }
-    let num_varying: u32 = ps
-        .summarize()
-        .iter()
-        .filter(|(fd, _)| **fd == ProtoField::Varying || **fd == ProtoField::Ambiguous)
-        .map(|(_, ct)| ct)
-        .sum();
-    let mut locs: Vec<usize> = Vec::with_capacity(num_varying as usize);
-    let mut idx_ctr = 0;
-    for (field, count) in ps.get_fields().iter() {
-        match field {
-            ProtoField::Fixed => idx_ctr += count,
-            ProtoField::Ambiguous | ProtoField::Varying => {
-                for idx in idx_ctr..idx_ctr + count {
-                    locs.push(idx as usize);
+    pub fn extract_varying_locs(&self, bs: &Bitstream) -> Result<Vec<usize>, BitkitError> {
+        Ok(self.extract_varying(bs)?.1)
+    }
+    /// Extract the varying and ambiguous bits from a Bitstream, as well as their locations
+    fn extract_varying(&self, bs: &Bitstream) -> Result<(String, Vec<usize>), BitkitError> {
+        if bs.len() != self.get_num_bits() {
+            return Err(BitkitError::LengthMismatch(bs.len(), self.get_num_bits()));
+        }
+        let num_varying: u32 = self
+            .summarize()
+            .iter()
+            .filter(|(fd, _)| **fd == ProtoField::Varying || **fd == ProtoField::Ambiguous)
+            .map(|(_, ct)| ct)
+            .sum();
+        let mut locs: Vec<usize> = Vec::with_capacity(num_varying as usize);
+        let mut idx_ctr = 0;
+        for (field, count) in self.get_fields().iter() {
+            match field {
+                ProtoField::Fixed => idx_ctr += count,
+                ProtoField::Ambiguous | ProtoField::Varying => {
+                    for idx in idx_ctr..idx_ctr + count {
+                        locs.push(idx as usize);
+                    }
+                    idx_ctr += count;
                 }
-                idx_ctr += count;
-            }
-        } // end match
+            } // end match
+        }
+        Ok((
+            locs.iter()
+                .map(|&ii| {
+                    let bit = bs.bit_at(ii);
+                    if bit == 1 {
+                        '1'
+                    } else {
+                        '0'
+                    }
+                })
+                .collect::<String>(),
+            locs,
+        ))
     }
-    Ok(locs
-        .iter()
-        .map(|&ii| {
-            let bit = bs.bit_at(ii);
-            if bit == 1 {
-                '1'
-            } else {
-                '0'
-            }
-        })
-        .collect::<String>())
-}
+} // impl ProtocolStructure
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,7 +191,7 @@ mod tests {
                 (ProtoField::Ambiguous, 0)
             ])
         );
-        let varying = extract_varying(&bits[0], &ps);
+        let varying = ps.extract_varying_bits(&bits[0]);
         assert!(varying.is_ok());
         assert_eq!(varying.unwrap(), "011".to_string());
     }

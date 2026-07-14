@@ -76,6 +76,9 @@ pub enum BitkitError {
     #[error("Empty bit string")]
     EmptyString,
 
+    #[error("Empty Bitstream vector")]
+    EmptyVec,
+
     #[error("Bit string length mismatch: {0} {1}")]
     LengthMismatch(usize, usize),
 
