@@ -6,6 +6,8 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use thiserror::Error;
+pub mod crc;
+pub mod linalg;
 pub mod proto;
 
 /// Wrapper struct for a string of demodulated bits
@@ -76,6 +78,15 @@ pub enum BitkitError {
 
     #[error("Bit string length mismatch: {0} {1}")]
     LengthMismatch(usize, usize),
+
+    #[error("Index error: used {0} max {1}")]
+    IndexError(usize, usize),
+
+    #[error("Dimension error: {0}x{1} * {2}x{3}")]
+    MatrixMultDimError(usize, usize, usize, usize),
+
+    #[error("{0}")]
+    MiscellaneousError(String),
 }
 
 impl Bitstream {
@@ -111,6 +122,9 @@ impl Bitstream {
     /// Use to index into the Bitstream
     pub fn bit_at(&self, index: usize) -> u8 {
         self.bits.as_bytes()[index] - b'0'
+    }
+    pub fn bits_as_bytes(&self) -> Vec<u8> {
+        self.bits.as_bytes().iter().map(|bit| bit - b'0').collect()
     }
     /// Chunk the Bitstream up into symbols of length `symlen`. The last symbol will be shorter
     /// if the Bitstream is not evenly divisible by `symlen`.
@@ -322,6 +336,7 @@ pub fn get_alphabet(bitstrs: &[Bitstream], symlen: usize, skip_bits: usize) -> H
     let mut counts: HashMap<String, u32> = HashMap::new();
     for bitstr in bitstrs {
         if skip_bits > 0 {
+            // skip(0) makes a copy, so don't call it if skip_bits == 0
             bitstr
                 .skip(skip_bits)
                 .accumulate_sym_counts(symlen, &mut counts);
